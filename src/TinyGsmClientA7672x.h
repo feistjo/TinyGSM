@@ -32,6 +32,7 @@
 #include "TinyGsmTCP.tpp"
 #include "TinyGsmSSL.tpp"
 #include "TinyGsmGPRS.tpp"
+#include "TinyGsmGPS.tpp"
 #include "TinyGsmCalling.tpp"
 #include "TinyGsmSMS.tpp"
 #include "TinyGsmGSMLocation.tpp"
@@ -55,6 +56,7 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
                       public TinyGsmSSL<TinyGsmA7672X, TINY_GSM_MUX_COUNT>,
                       public TinyGsmCalling<TinyGsmA7672X>,
                       public TinyGsmSMS<TinyGsmA7672X>,
+                      public TinyGsmGPS<TinyGsmA7672X>,
                       public TinyGsmGSMLocation<TinyGsmA7672X>,
                       public TinyGsmTime<TinyGsmA7672X>,
                       public TinyGsmNTP<TinyGsmA7672X>,
@@ -66,6 +68,7 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
   friend class TinyGsmSSL<TinyGsmA7672X, TINY_GSM_MUX_COUNT>;
   friend class TinyGsmCalling<TinyGsmA7672X>;
   friend class TinyGsmSMS<TinyGsmA7672X>;
+  friend class TinyGsmGPS<TinyGsmA7672X>;
   friend class TinyGsmGSMLocation<TinyGsmA7672X>;
   friend class TinyGsmTime<TinyGsmA7672X>;
   friend class TinyGsmNTP<TinyGsmA7672X>;
@@ -446,7 +449,136 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
   /*
    * GPS/GNSS/GLONASS location functions
    */
-  // No functions of this type supported
+  protected:
+  // enable GPS
+  bool enableGPSImpl() {
+    sendAT(GF("+CGNSSPWR=1,1"));
+    if (waitResponse() != 1) { return false; }
+    if (waitResponse(9000, "+CGNSSPWR: READY!") != 1) { return false; }
+    return true;
+  }
+
+  bool disableGPSImpl() {
+    sendAT(GF("+CGNSSPWR=0,1"));
+    if (waitResponse() != 1) { return false; }
+    return true;
+  }
+
+  // get the RAW GPS output
+  String getGPSrawImpl() {
+    sendAT(GF("+CGNSSINFO"));
+    if (waitResponse(GF(AT_NL "+CGNSSINFO:")) != 1) { return ""; }
+    String res = stream.readStringUntil('\n');
+    waitResponse();
+    res.trim();
+    return res;
+  }
+
+  // get GPS informations
+  bool getGPSImpl(float* lat, float* lon, float* speed = 0, float* alt = 0,
+                  int* vsat = 0, int* usat = 0, float* accuracy = 0,
+                  int* year = 0, int* month = 0, int* day = 0, int* hour = 0,
+                  int* minute = 0, int* second = 0) {
+    sendAT(GF("+CGNSSINFO"));
+    if (waitResponse(GF(AT_NL "+CGNSSINFO:")) != 1) { return false; }
+
+    uint8_t fixMode = streamGetIntBefore(',');  // mode 2=2D Fix or 3=3DFix
+                                                // TODO(?) Can 1 be returned
+    if (fixMode == 1 || fixMode == 2 || fixMode == 3) {
+      // init variables
+      float ilat = 0;
+      char  north;
+      float ilon = 0;
+      char  east;
+      float ispeed       = 0;
+      float ialt         = 0;
+      int   ivsat        = 0;
+      int   iusat        = 0;
+      float iaccuracy    = 0;
+      int   iyear        = 0;
+      int   imonth       = 0;
+      int   iday         = 0;
+      int   ihour        = 0;
+      int   imin         = 0;
+      float secondWithSS = 0;
+
+      streamSkipUntil(',');               // GPS satellite valid numbers
+      streamSkipUntil(',');               // GLONASS satellite valid numbers
+      streamSkipUntil(',');               // BEIDOU satellite valid numbers
+      ilat  = streamGetFloatBefore(',');  // Latitude in dd.ddddd
+      north = stream.readStringUntil(',').charAt(
+          0);                            // N/S Indicator, N=north or S=south
+      ilon = streamGetFloatBefore(',');  // Longitude in ddd.ddddd
+      east = stream.readStringUntil(',').charAt(
+          0);  // E/W Indicator, E=east or W=west
+
+      // Date. Output format is ddmmyy
+      iday   = streamGetIntLength(2);    // Two digit day
+      imonth = streamGetIntLength(2);    // Two digit month
+      iyear  = streamGetIntBefore(',');  // Two digit year
+
+      // UTC Time. Output format is hhmmss.ss
+      ihour = streamGetIntLength(2);  // Two digit hour
+      imin  = streamGetIntLength(2);  // Two digit minute
+      secondWithSS =
+          streamGetFloatBefore(',');  // 4 digit second with subseconds
+
+      ialt   = streamGetFloatBefore(',');  // MSL Altitude. Unit is meters
+      ispeed = streamGetFloatBefore(',');  // Speed Over Ground. Unit is knots.
+      streamSkipUntil(',');                // Course Over Ground. Degrees.
+      iaccuracy = streamGetFloatBefore(',');  // Position Dilution Of Precision
+      streamSkipUntil(',');   // Horizontal Dilution Of Precision
+      streamSkipUntil('\n');  // Vertical Dilution Of Precision
+
+      // Set pointers
+      if (lat != nullptr)
+        *lat = ilat *
+            (north == 'N' ? 1 : -1);
+      if (lon != nullptr)
+        *lon = ilon *
+            (east == 'E' ? 1 : -1);
+      if (speed != nullptr) *speed = ispeed;
+      if (alt != nullptr) *alt = ialt;
+      if (vsat != nullptr) *vsat = ivsat;
+      if (usat != nullptr) *usat = iusat;
+      if (accuracy != nullptr) *accuracy = iaccuracy;
+      if (iyear < 2000) iyear += 2000;
+      if (year != nullptr) *year = iyear;
+      if (month != nullptr) *month = imonth;
+      if (day != nullptr) *day = iday;
+      if (hour != nullptr) *hour = ihour;
+      if (minute != nullptr) *minute = imin;
+      if (second != nullptr) *second = static_cast<int>(secondWithSS);
+
+      waitResponse();
+      return true;
+    }
+
+    waitResponse();
+    return false;
+  }
+
+  /**
+   *  CGNSSMODE: <gnss_mode>,<dpo_mode>
+   *  This command is used to configure GPS, GLONASS, BEIDOU and QZSS support
+   * mode.
+   * Domestic: 1 : GPS L1 + BDS B1 + QZSS 2 : BDS B1 3 : GPS L1 + QZSS
+   * Foreign: 1 : GPS L1 + SBAS + QZSS 2 : BDS B1 3: GPS + GLONASS + GALILEO + SBAS + QZSS 3: GPS_BDS_GALILEO
+   */
+  String setGNSSModeImpl(uint8_t mode, bool dpo) {
+    String res;
+    sendAT(GF("+CGNSSMODE="), mode);
+    if (waitResponse(10000L, res) != 1) { return ""; }
+    res.replace(AT_NL, "");
+    res.trim();
+    return res;
+  }
+
+  uint8_t getGNSSModeImpl() {
+    sendAT(GF("+CGNSSMODE?"));
+    if (waitResponse(GF(AT_NL "+CGNSSMODE:")) != 1) { return 0; }
+    return stream.readStringUntil('\r').toInt();
+  }
 
   /*
    * Time functions
