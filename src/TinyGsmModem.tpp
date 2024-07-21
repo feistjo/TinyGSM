@@ -200,7 +200,7 @@ class TinyGsmModem {
                       GsmConstStr r2 = GFP(GSM_ERROR), GsmConstStr r3 = nullptr,
                       GsmConstStr r4 = nullptr, GsmConstStr r5 = nullptr,
                       GsmConstStr r6 = nullptr, GsmConstStr r7 = nullptr) {
-    return waitResponse(1000L, r1, r2, r3, r4, r5, r6, r7);
+    return waitResponse(9000L, r1, r2, r3, r4, r5, r6, r7);
   }
 
   /**
@@ -676,7 +676,7 @@ class TinyGsmModem {
   String getModemInfoImpl() {
     thisModem().sendAT(GF("I"));  // 3GPP TS 27.007
     String res;
-    if (thisModem().waitResponse(1000L, res) != 1) { return ""; }
+    if (thisModem().waitResponse(10000L, res) != 1) { return ""; }
     thisModem().cleanResponseString(res);
     return res;
   }

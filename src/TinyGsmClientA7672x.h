@@ -305,7 +305,7 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
  protected:
   bool isNetworkConnectedImpl() {
     A7672xRegStatus s = getRegistrationStatus();
-    return (s == REG_OK_HOME || s == REG_OK_ROAMING);
+    return (s == REG_OK_HOME || s == REG_OK_ROAMING || s == 7);
   }
 
   /*
@@ -452,14 +452,14 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
   protected:
   // enable GPS
   bool enableGPSImpl() {
-    sendAT(GF("+CGNSSPWR=1,1"));
+    sendAT(GF("+CGNSSPWR=1"));
     if (waitResponse() != 1) { return false; }
     if (waitResponse(9000, "+CGNSSPWR: READY!") != 1) { return false; }
     return true;
   }
 
   bool disableGPSImpl() {
-    sendAT(GF("+CGNSSPWR=0,1"));
+    sendAT(GF("+CGNSSPWR=0"));
     if (waitResponse() != 1) { return false; }
     return true;
   }
@@ -621,10 +621,6 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
     int8_t   rsp;
     uint32_t timeout_ms = ((uint32_t)timeout_s) * 1000;
 
-    // +CTCPKA:<keepalive>,<keepidle>,<keepcount>,<keepinterval>
-    sendAT(GF("+CTCPKA=1,2,5,1"));
-    if (waitResponse(2000L) != 1) { return false; }
-
     if (ssl) {
       hasSSL = true;
       // set the ssl version
@@ -681,7 +677,7 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
                          GF("ERROR" AT_NL), GF("CLOSE OK" AT_NL));
     } else {
       sendAT(GF("+NETOPEN"));
-      if (waitResponse(2000L) != 1) { return false; }
+      if (waitResponse(2000L) != 1) { /* return false; */ } //will error if network already connected, but we can still continue
 
       sendAT(GF("+NETOPEN?"));
       if (waitResponse(2000L) != 1) { return false; }
@@ -693,6 +689,10 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
           timeout_ms, GF("+CIPOPEN: 0,0" AT_NL), GF("+CIPOPEN: 0,1" AT_NL),
           GF("+CIPOPEN: 0,4" AT_NL), GF("ERROR" AT_NL),
           GF("CLOSE OK" AT_NL));  // Happens when HTTPS handshake fails
+
+      // +CTCPKA:<keepalive>,<keepidle>,<keepcount>,<keepinterval>
+      sendAT(GF("+CTCPKA=1,2,5,1"));
+      if (waitResponse(2000L) != 1) { return false; }
     }
 
     return (1 == rsp);
@@ -710,7 +710,7 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
     if (waitResponse() != 1) { return 0; }
     if (waitResponse(10000L, GF("+CCHSEND: 0,0" AT_NL),
                      GF("+CCHSEND: 0,4" AT_NL), GF("+CCHSEND: 0,9" AT_NL),
-                     GF("ERROR" AT_NL), GF("CLOSE OK" AT_NL)) != 1) {
+                     GF("ERROR" AT_NL), GF("CLOSE OK" AT_NL), GF("+CIPSEND:")) != 1) {
       return 0;
     }
     return len;
@@ -788,7 +788,20 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
   }
 
   bool modemGetConnected(uint8_t mux) {
-    int8_t res = 0;
+    // Read the status of all sockets at once
+    sendAT(GF("+CIPCLOSE?"));
+    if (waitResponse(GF("+CIPCLOSE:")) != 1) {
+      // return false;  // TODO:  Why does this not read correctly?
+    }
+    for (int muxNo = 0; muxNo < TINY_GSM_MUX_COUNT; muxNo++) {
+      // +CIPCLOSE:<link0_state>,<link1_state>,...,<link9_state>
+      bool muxState = stream.parseInt();
+      if (sockets[muxNo]) { sockets[muxNo]->sock_connected = muxState; }
+    }
+    waitResponse();  // Should be an OK at the end
+    if (!sockets[mux]) return false;
+    return sockets[mux]->sock_connected;
+    /* int8_t res = 0;
     if (hasSSL) {
       bool connected = this->sockets[mux]->sock_connected;
       // DBG("### Connected:", connected);
@@ -801,7 +814,7 @@ class TinyGsmA7672X : public TinyGsmModem<TinyGsmA7672X>,
                                   // CLOSING\""), GF(",\"INITIAL\""));
       waitResponse();
     }
-    return 1 == res;
+    return 1 == res; */
   }
 
   /*
